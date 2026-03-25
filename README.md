@@ -114,4 +114,4 @@ The web UI lets you:
 
 ## License
 
-No license has been added yet. If you want this repository to be open for reuse, add a license such as MIT.
+This project is licensed under the MIT License. See [LICENSE](LICENSE).
