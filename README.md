@@ -55,6 +55,12 @@ README_SAFE_MAC_CLEAN_WEB.md
 
 ### CLI
 
+Focused scan preview:
+
+```bash
+./safe_mac_clean.sh --profile focused
+```
+
 Preview only:
 
 ```bash
@@ -79,6 +85,12 @@ Large-cache example with visible progress:
 ./safe_mac_clean.sh --days 30 --progress-every 1000 --max-candidates 50000
 ```
 
+Available scan profiles:
+
+- `standard`: daily conservative scan
+- `focused`: automatically includes app container caches and Xcode `DerivedData`
+- `developer`: prioritizes developer-heavy cache areas with a shorter age threshold
+
 ### Web UI
 
 Start the local server:
@@ -96,7 +108,9 @@ http://127.0.0.1:8765
 The web UI lets you:
 
 - start a background scan
+- choose standard, focused, or developer scan presets
 - watch progress
+- review top space-heavy directories
 - review summary and large files
 - confirm cleanup with `MOVE_TO_TRASH`
 - move matched files into a session folder inside `~/.Trash`

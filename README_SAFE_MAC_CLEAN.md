@@ -20,16 +20,30 @@
 - `--include-container-caches`：`~/Library/Containers/.../Data/Library/Caches`
 - `--include-xcode`：`~/Library/Developer/Xcode/DerivedData`
 
+## 扫描预设
+- `--profile standard`：日常保守扫描（默认）
+- `--profile focused`：重点扫描，自动包含 Container 缓存与 Xcode DerivedData
+- `--profile developer`：开发者扫描，更偏向开发工具缓存，默认天数更短
+
+预设只是帮你填默认值，手动参数仍然可以覆盖它：
+```bash
+./safe_mac_clean.sh --profile focused --days 60
+```
+
 ## 推荐使用流程
 1. 先预览（最安全）
 ```bash
 ./safe_mac_clean.sh
 ```
-2. 如果结果合理，再执行移动到回收站
+2. 想自动覆盖重点区域，先跑重点扫描预览
+```bash
+./safe_mac_clean.sh --profile focused
+```
+3. 如果结果合理，再执行移动到回收站
 ```bash
 ./safe_mac_clean.sh --apply
 ```
-3. 想更保守：只清理更久之前的文件（如 60 天）
+4. 想更保守：只清理更久之前的文件（如 60 天）
 ```bash
 ./safe_mac_clean.sh --apply --days 60
 ```
@@ -55,6 +69,10 @@
 - 启用更多缓存清理：
 ```bash
 ./safe_mac_clean.sh --apply --include-container-caches --include-xcode
+```
+- 重点扫描并执行：
+```bash
+./safe_mac_clean.sh --apply --profile focused
 ```
 
 ## 回滚/恢复

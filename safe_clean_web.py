@@ -27,6 +27,33 @@ TRASH_DIR = HOME / ".Trash"
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8765
 
+SCAN_PROFILES = {
+    "standard": {
+        "label": "Standard",
+        "days": 30,
+        "include_container_caches": False,
+        "include_xcode": False,
+        "max_candidates": 50000,
+        "progress_every": 1000,
+    },
+    "focused": {
+        "label": "Focused",
+        "days": 14,
+        "include_container_caches": True,
+        "include_xcode": True,
+        "max_candidates": 80000,
+        "progress_every": 1000,
+    },
+    "developer": {
+        "label": "Developer",
+        "days": 7,
+        "include_container_caches": False,
+        "include_xcode": True,
+        "max_candidates": 100000,
+        "progress_every": 1000,
+    },
+}
+
 
 def now_ts() -> str:
     return datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -44,6 +71,7 @@ def human_size(num: int) -> str:
 
 @dataclass
 class ScanConfig:
+    profile: str = "standard"
     days: int = 30
     include_container_caches: bool = False
     include_xcode: bool = False
@@ -113,11 +141,37 @@ class CleanerPolicy:
         return False
 
 
+def build_scan_config(body: dict) -> ScanConfig:
+    profile = str(body.get("profile", "standard")).strip() or "standard"
+    if profile not in SCAN_PROFILES:
+        raise ValueError(f"unknown profile: {profile}")
+
+    preset = SCAN_PROFILES[profile]
+
+    cfg = ScanConfig(
+        profile=profile,
+        days=int(body.get("days", preset["days"])),
+        include_container_caches=bool(
+            body.get("include_container_caches", preset["include_container_caches"])
+        ),
+        include_xcode=bool(body.get("include_xcode", preset["include_xcode"])),
+        max_candidates=max(0, int(body.get("max_candidates", preset["max_candidates"]))),
+        progress_every=max(0, int(body.get("progress_every", preset["progress_every"]))),
+    )
+    if cfg.days < 0:
+        raise ValueError("days must be >= 0")
+    return cfg
+
+
 def update_top_files(top_files: List[Tuple[str, int]], path: str, size: int, limit: int = 20) -> None:
     top_files.append((path, size))
     top_files.sort(key=lambda x: x[1], reverse=True)
     if len(top_files) > limit:
         del top_files[limit:]
+
+
+def top_directories(dir_sizes: Dict[str, int], limit: int = 12) -> List[Tuple[str, int]]:
+    return sorted(dir_sizes.items(), key=lambda x: x[1], reverse=True)[:limit]
 
 
 class JobStore:
@@ -308,17 +362,21 @@ def build_index_html() -> str:
   <title>Safe Mac Cleaner</title>
   <style>
     :root {
-      --bg: #f6f7f9;
+      --bg: #f3f4ef;
       --card: #ffffff;
       --ink: #1f2937;
       --sub: #6b7280;
       --accent: #0f766e;
+      --accent-2: #2563eb;
       --warn: #b45309;
       --line: #e5e7eb;
     }
     body {
       margin: 0;
-      background: radial-gradient(circle at top left, #e0f2fe, var(--bg) 40%);
+      background:
+        linear-gradient(135deg, rgba(15,118,110,.08), transparent 34%),
+        linear-gradient(225deg, rgba(180,83,9,.08), transparent 32%),
+        var(--bg);
       color: var(--ink);
       font-family: "SF Pro Text", "PingFang SC", "Helvetica Neue", sans-serif;
     }
@@ -330,7 +388,7 @@ def build_index_html() -> str:
     .card {
       background: var(--card);
       border: 1px solid var(--line);
-      border-radius: 14px;
+      border-radius: 8px;
       padding: 14px;
       box-shadow: 0 8px 24px rgba(0,0,0,0.04);
     }
@@ -352,6 +410,8 @@ def build_index_html() -> str:
       font-weight: 600;
     }
     button.secondary { background: #334155; }
+    button.profile { background: #475569; }
+    button.profile.active { background: var(--accent-2); }
     button.warn { background: #b91c1c; }
     button:disabled { opacity: .5; cursor: not-allowed; }
     .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
@@ -361,7 +421,9 @@ def build_index_html() -> str:
     .warning { color: var(--warn); }
     .table { width: 100%; border-collapse: collapse; }
     .table th, .table td { border-bottom: 1px solid var(--line); padding: 8px 6px; text-align: left; font-size: 13px; }
+    .table td:first-child { word-break: break-word; }
     .pill { display: inline-block; border: 1px solid var(--line); border-radius: 999px; padding: 2px 8px; font-size: 12px; }
+    .toolbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 10px; }
   </style>
 </head>
 <body>
@@ -374,6 +436,11 @@ def build_index_html() -> str:
     <div class="grid">
       <div class="card">
         <h3>1) 扫描参数</h3>
+        <div class="toolbar">
+          <button class="profile active" data-profile="standard">标准扫描</button>
+          <button class="profile" data-profile="focused">重点扫描</button>
+          <button class="profile" data-profile="developer">开发者扫描</button>
+        </div>
         <div class="row">
           <label>天数阈值 <input id="days" type="number" min="0" value="30" /></label>
           <label>进度频率 <input id="progress" type="number" min="0" value="1000" /></label>
@@ -389,6 +456,11 @@ def build_index_html() -> str:
         <h3>2) 扫描结果</h3>
         <div id="summary" class="stat">无</div>
         <div id="roots" class="small"></div>
+        <h4>Top 目录</h4>
+        <table class="table" id="topDirsTable">
+          <thead><tr><th>目录</th><th>大小</th></tr></thead>
+          <tbody></tbody>
+        </table>
         <h4>Top 大文件</h4>
         <table class="table" id="topFilesTable">
           <thead><tr><th>文件</th><th>大小</th></tr></thead>
@@ -416,6 +488,12 @@ def build_index_html() -> str:
 
 <script>
 const state = { currentJobId: null, pollTimer: null, currentStatus: null };
+const presets = {
+  standard: { days: 30, progress_every: 1000, max_candidates: 50000, containers: false, xcode: false },
+  focused: { days: 14, progress_every: 1000, max_candidates: 80000, containers: true, xcode: true },
+  developer: { days: 7, progress_every: 1000, max_candidates: 100000, containers: false, xcode: true },
+};
+let activeProfile = 'standard';
 
 function fmtBytes(n) {
   const units = ["B", "KB", "MB", "GB", "TB"];
@@ -430,6 +508,19 @@ function setScanState(text, cls='') {
   el.className = `small ${cls}`;
 }
 
+function applyPreset(name) {
+  const preset = presets[name] || presets.standard;
+  activeProfile = name in presets ? name : 'standard';
+  document.getElementById('days').value = preset.days;
+  document.getElementById('progress').value = preset.progress_every;
+  document.getElementById('max').value = preset.max_candidates;
+  document.getElementById('containers').checked = preset.containers;
+  document.getElementById('xcode').checked = preset.xcode;
+  document.querySelectorAll('button.profile').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.profile === activeProfile);
+  });
+}
+
 function updateSummary(job) {
   const summary = document.getElementById('summary');
   summary.textContent = `候选文件 ${job.scanned_files} 个，估算 ${fmtBytes(job.scanned_bytes)}，状态 ${job.status}`;
@@ -437,6 +528,14 @@ function updateSummary(job) {
   const roots = document.getElementById('roots');
   const parts = (job.finished_roots || []).map(r => `${r.root}: ${r.files} files / ${fmtBytes(r.bytes)}`);
   roots.innerHTML = parts.map(p => `<div>${p}</div>`).join('') || '暂无';
+
+  const dirsBody = document.querySelector('#topDirsTable tbody');
+  dirsBody.innerHTML = '';
+  (job.top_dirs || []).forEach(([p, s]) => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td class="mono">${p}</td><td>${fmtBytes(s)}</td>`;
+    dirsBody.appendChild(tr);
+  });
 
   const tbody = document.querySelector('#topFilesTable tbody');
   tbody.innerHTML = '';
@@ -452,6 +551,7 @@ function updateSummary(job) {
 
 async function startScan() {
   const body = {
+    profile: activeProfile,
     days: Number(document.getElementById('days').value || 30),
     progress_every: Number(document.getElementById('progress').value || 1000),
     max_candidates: Number(document.getElementById('max').value || 0),
@@ -536,12 +636,16 @@ async function refreshJobs() {
     el.textContent = '暂无';
     return;
   }
-  el.innerHTML = arr.map(j => `<div><span class="pill">${j.status}</span> <span class="mono">${j.id}</span> ${j.scanned_files} files / ${fmtBytes(j.scanned_bytes)} (${j.created_at})</div>`).join('');
+  el.innerHTML = arr.map(j => `<div><span class="pill">${j.profile || 'standard'}</span> <span class="pill">${j.status}</span> <span class="mono">${j.id}</span> ${j.scanned_files} files / ${fmtBytes(j.scanned_bytes)} (${j.created_at})</div>`).join('');
 }
 
 document.getElementById('scanBtn').addEventListener('click', startScan);
 document.getElementById('applyBtn').addEventListener('click', applyClean);
 document.getElementById('refreshJobs').addEventListener('click', refreshJobs);
+document.querySelectorAll('button.profile').forEach(btn => {
+  btn.addEventListener('click', () => applyPreset(btn.dataset.profile));
+});
+applyPreset('standard');
 refreshJobs();
 </script>
 </body>
@@ -565,6 +669,7 @@ class Handler(BaseHTTPRequestHandler):
                     {
                         "id": j.id,
                         "created_at": j.created_at,
+                        "profile": j.config.profile,
                         "status": j.status,
                         "scanned_files": j.scanned_files,
                         "scanned_bytes": j.scanned_bytes,
@@ -581,9 +686,11 @@ class Handler(BaseHTTPRequestHandler):
                 return
 
             top_files = [[p, s] for p, s in job.top_files]
+            top_dirs = [[p, s] for p, s in top_directories(job.dir_sizes)]
             payload = {
                 "id": job.id,
                 "created_at": job.created_at,
+                "profile": job.config.profile,
                 "status": job.status,
                 "phase": job.phase,
                 "current_root": job.current_root,
@@ -591,6 +698,7 @@ class Handler(BaseHTTPRequestHandler):
                 "scanned_bytes": job.scanned_bytes,
                 "finished_roots": job.finished_roots,
                 "top_files": top_files,
+                "top_dirs": top_dirs,
                 "stop_reason": job.stop_reason,
                 "error": job.error,
             }
@@ -605,15 +713,7 @@ class Handler(BaseHTTPRequestHandler):
         if parsed.path == "/api/scan":
             body = parse_json_body(self)
             try:
-                cfg = ScanConfig(
-                    days=int(body.get("days", 30)),
-                    include_container_caches=bool(body.get("include_container_caches", False)),
-                    include_xcode=bool(body.get("include_xcode", False)),
-                    max_candidates=max(0, int(body.get("max_candidates", 0))),
-                    progress_every=max(0, int(body.get("progress_every", 1000))),
-                )
-                if cfg.days < 0:
-                    raise ValueError("days must be >= 0")
+                cfg = build_scan_config(body)
             except (TypeError, ValueError) as exc:
                 json_response(self, {"error": f"invalid params: {exc}"}, status=400)
                 return

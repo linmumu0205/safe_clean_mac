@@ -8,6 +8,7 @@ IFS=$'\n\t'
 
 SCRIPT_NAME="$(basename "$0")"
 MODE="dry-run"
+PROFILE="standard"
 DAYS=30
 VERBOSE=0
 INCLUDE_CONTAINER_CACHES=0
@@ -15,6 +16,11 @@ INCLUDE_XCODE_DERIVED_DATA=0
 ASSUME_YES=0
 PROGRESS_EVERY=5000
 MAX_CANDIDATES=0
+DAYS_SET=0
+CONTAINER_SET=0
+XCODE_SET=0
+PROGRESS_SET=0
+MAX_SET=0
 
 TRASH_DIR="$HOME/.Trash"
 TIMESTAMP="$(date +%Y%m%d-%H%M%S)"
@@ -30,6 +36,7 @@ Safe macOS cleaner (default: dry-run)
 
 Options:
   --apply                     Actually move files to ~/.Trash (default: preview only)
+  --profile NAME              Use scan preset: standard, focused, developer (default: standard)
   --days N                    Only clean files older than N days (default: 30)
   --include-container-caches  Include app container caches under ~/Library/Containers/*/Data/Library/Caches
   --include-xcode             Include Xcode DerivedData older than --days
@@ -41,6 +48,7 @@ Options:
 
 Examples:
   $SCRIPT_NAME
+  $SCRIPT_NAME --profile focused
   $SCRIPT_NAME --apply --days 14
   $SCRIPT_NAME --apply --include-container-caches --include-xcode
   $SCRIPT_NAME --days 30 --progress-every 1000 --max-candidates 50000
@@ -70,11 +78,66 @@ log_line() {
   echo "$line" | tee -a "$LOG_FILE" >/dev/null
 }
 
+print_scan_roots() {
+  local total="${#SCAN_ROOTS[@]}"
+  local limit=20
+  local i
+
+  info "Scan roots ($total):"
+  if (( total <= limit )); then
+    for r in "${SCAN_ROOTS[@]}"; do
+      echo "  - $r"
+    done
+    return 0
+  fi
+
+  for ((i = 0; i < limit; i++)); do
+    echo "  - ${SCAN_ROOTS[$i]}"
+  done
+  echo "  ... $((total - limit)) more roots hidden"
+}
+
 declare -a ALLOWED_ROOTS=()
 add_allowed_root() {
   local p="$1"
   [[ -d "$p" ]] || return 0
   ALLOWED_ROOTS+=("$(cd "$p" && pwd -P)")
+}
+
+add_container_cache_roots() {
+  local containers="$HOME/Library/Containers"
+  local child cache_dir
+  [[ -d "$containers" ]] || return 0
+  for child in "$containers"/*; do
+    [[ -d "$child" ]] || continue
+    cache_dir="$child/Data/Library/Caches"
+    add_allowed_root "$cache_dir"
+  done
+}
+
+apply_profile() {
+  case "$PROFILE" in
+    standard)
+      ;;
+    focused)
+      if (( DAYS_SET == 0 )); then DAYS=14; fi
+      if (( CONTAINER_SET == 0 )); then INCLUDE_CONTAINER_CACHES=1; fi
+      if (( XCODE_SET == 0 )); then INCLUDE_XCODE_DERIVED_DATA=1; fi
+      if (( MAX_SET == 0 )); then MAX_CANDIDATES=80000; fi
+      if (( PROGRESS_SET == 0 )); then PROGRESS_EVERY=1000; fi
+      ;;
+    developer)
+      if (( DAYS_SET == 0 )); then DAYS=7; fi
+      if (( XCODE_SET == 0 )); then INCLUDE_XCODE_DERIVED_DATA=1; fi
+      if (( MAX_SET == 0 )); then MAX_CANDIDATES=100000; fi
+      if (( PROGRESS_SET == 0 )); then PROGRESS_EVERY=1000; fi
+      ;;
+    *)
+      err "Unknown profile: $PROFILE"
+      err "Supported profiles: standard, focused, developer"
+      exit 2
+      ;;
+  esac
 }
 
 refresh_allowed_roots() {
@@ -86,7 +149,7 @@ refresh_allowed_roots() {
   add_allowed_root "$HOME/.Trash"
 
   if (( INCLUDE_CONTAINER_CACHES == 1 )); then
-    add_allowed_root "$HOME/Library/Containers"
+    add_container_cache_roots
   fi
   if (( INCLUDE_XCODE_DERIVED_DATA == 1 )); then
     add_allowed_root "$HOME/Library/Developer/Xcode/DerivedData"
@@ -99,30 +162,40 @@ while [[ $# -gt 0 ]]; do
       MODE="apply"
       shift
       ;;
+    --profile)
+      [[ $# -ge 2 ]] || { err "--profile requires a name"; exit 2; }
+      PROFILE="$2"
+      shift 2
+      ;;
     --days)
       [[ $# -ge 2 ]] || { err "--days requires a number"; exit 2; }
       is_number "$2" || { err "--days must be a non-negative integer"; exit 2; }
       DAYS="$2"
+      DAYS_SET=1
       shift 2
       ;;
     --include-container-caches)
       INCLUDE_CONTAINER_CACHES=1
+      CONTAINER_SET=1
       shift
       ;;
     --include-xcode)
       INCLUDE_XCODE_DERIVED_DATA=1
+      XCODE_SET=1
       shift
       ;;
     --progress-every)
       [[ $# -ge 2 ]] || { err "--progress-every requires a number"; exit 2; }
       is_number "$2" || { err "--progress-every must be a non-negative integer"; exit 2; }
       PROGRESS_EVERY="$2"
+      PROGRESS_SET=1
       shift 2
       ;;
     --max-candidates)
       [[ $# -ge 2 ]] || { err "--max-candidates requires a number"; exit 2; }
       is_number "$2" || { err "--max-candidates must be a non-negative integer"; exit 2; }
       MAX_CANDIDATES="$2"
+      MAX_SET=1
       shift 2
       ;;
     -y|--yes)
@@ -145,6 +218,7 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+apply_profile
 refresh_allowed_roots
 
 # Build scan roots (subset of allowlist).
@@ -173,12 +247,10 @@ ROOT_BYTES=0
 STOP_EARLY=0
 
 info "Mode: $MODE"
+info "Profile: $PROFILE"
 info "Older-than days: $DAYS"
 info "Log: $LOG_FILE"
-info "Scan roots:"
-for r in "${SCAN_ROOTS[@]}"; do
-  echo "  - $r"
-done
+print_scan_roots
 
 for r in "${SCAN_ROOTS[@]}"; do
   [[ -d "$r" ]] || continue
